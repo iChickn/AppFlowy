@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:appflowy/env/cloud_env.dart';
+import 'package:appflowy/startup/tasks/feature_flag_task.dart';
 import 'package:appflowy/workspace/application/settings/prelude.dart';
 import 'package:appflowy_backend/appflowy_backend.dart';
 import 'package:flutter/foundation.dart';
@@ -22,9 +23,9 @@ abstract class EntryPoint {
 }
 
 class FlowyRunnerContext {
-  final Directory applicationDataDirectory;
-
   FlowyRunnerContext({required this.applicationDataDirectory});
+
+  final Directory applicationDataDirectory;
 }
 
 Future<void> runAppFlowy({bool isAnon = false}) async {
@@ -76,19 +77,22 @@ class FlowyRunner {
       IntegrationTestHelper.rustEnvsBuilder = rustEnvsBuilder;
     }
 
+    // Clear and dispose tasks from previous AppLaunch
+    if (getIt.isRegistered(instance: AppLauncher)) {
+      await getIt<AppLauncher>().dispose();
+    }
+
     // Clear all the states in case of rebuilding.
     await getIt.reset();
 
     final config = LaunchConfiguration(
       isAnon: isAnon,
+      // Unit test can't use the package_info_plus plugin
+      version: mode.isUnitTest
+          ? '1.0.0'
+          : await PackageInfo.fromPlatform().then((value) => value.version),
       rustEnvs: rustEnvsBuilder?.call() ?? {},
     );
-
-    if (!mode.isUnitTest) {
-      // Unit test can't use the package_info_plus plugin
-      config.rustEnvs["APP_VERSION"] =
-          await PackageInfo.fromPlatform().then((value) => value.version);
-    }
 
     // Specify the env
     await initGetIt(getIt, mode, f, config);
@@ -110,7 +114,8 @@ class FlowyRunner {
         // there's a flag named _enable in memory_leak_detector.dart. If it's false, the task will be ignored.
         MemoryLeakDetectorTask(),
         const DebugTask(),
-        const DeviceInfoTask(),
+        const FeatureFlagTask(),
+
         // localization
         const InitLocalizationTask(),
         // init the app window
@@ -123,6 +128,9 @@ class FlowyRunner {
         // init the app widget
         // ignore in test mode
         if (!mode.isUnitTest) ...[
+          // The DeviceOrApplicationInfoTask should be placed before the AppWidgetTask to fetch the app information.
+          // It is unable to get the device information from the test environment.
+          const ApplicationInfoTask(),
           const HotKeyTask(),
           if (isSupabaseEnabled) InitSupabaseTask(),
           if (isAppFlowyCloudEnabled) InitAppFlowyCloudTask(),
@@ -172,10 +180,11 @@ Future<void> initGetIt(
 }
 
 class LaunchContext {
+  LaunchContext(this.getIt, this.env, this.config);
+
   GetIt getIt;
   IntegrationMode env;
   LaunchConfiguration config;
-  LaunchContext(this.getIt, this.env, this.config);
 }
 
 enum LaunchTaskType {

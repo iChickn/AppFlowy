@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use collab_folder::{FolderData, RepeatedViewIdentifier, ViewIdentifier, Workspace};
-use flowy_folder_deps::folder_builder::{FlattedViews, ParentChildViews, WorkspaceViewBuilder};
+use flowy_folder_pub::folder_builder::{FlattedViews, ParentChildViews, WorkspaceViewBuilder};
 use tokio::sync::RwLock;
 
 use lib_infra::util::timestamp;
@@ -54,6 +54,7 @@ impl DefaultFolderBuilder {
       favorites: Default::default(),
       recent: Default::default(),
       trash: Default::default(),
+      private: Default::default(),
     }
   }
 }

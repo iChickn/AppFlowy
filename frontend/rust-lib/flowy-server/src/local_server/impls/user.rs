@@ -1,16 +1,14 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Error};
-use collab::core::collab::CollabDocState;
 use collab_entity::CollabObject;
 use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use uuid::Uuid;
 
 use flowy_error::FlowyError;
-use flowy_user_deps::cloud::{UserCloudService, UserCollabParams};
-use flowy_user_deps::entities::*;
-use flowy_user_deps::DEFAULT_USER_NAME;
+use flowy_user_pub::cloud::{UserCloudService, UserCollabParams};
+use flowy_user_pub::entities::*;
+use flowy_user_pub::DEFAULT_USER_NAME;
 use lib_infra::box_any::BoxAny;
 use lib_infra::future::FutureResult;
 use lib_infra::util::timestamp;
@@ -87,8 +85,25 @@ impl UserCloudService for LocalServerUserAuthServiceImpl {
   fn generate_sign_in_url_with_email(&self, _email: &str) -> FutureResult<String, FlowyError> {
     FutureResult::new(async {
       Err(
-        FlowyError::internal().with_context("Can't generate callback url when using offline mode"),
+        FlowyError::local_version_not_support()
+          .with_context("Not support generate sign in url with email"),
       )
+    })
+  }
+
+  fn create_user(&self, _email: &str, _password: &str) -> FutureResult<(), FlowyError> {
+    FutureResult::new(async {
+      Err(FlowyError::local_version_not_support().with_context("Not support create user"))
+    })
+  }
+
+  fn sign_in_with_password(
+    &self,
+    _email: &str,
+    _password: &str,
+  ) -> FutureResult<UserProfile, FlowyError> {
+    FutureResult::new(async {
+      Err(FlowyError::local_version_not_support().with_context("Not support"))
     })
   }
 
@@ -133,11 +148,17 @@ impl UserCloudService for LocalServerUserAuthServiceImpl {
     FutureResult::new(async { Ok(vec![]) })
   }
 
-  fn get_user_awareness_doc_state(&self, _uid: i64) -> FutureResult<CollabDocState, Error> {
-    FutureResult::new(async { Ok(vec![]) })
+  fn get_user_awareness_doc_state(
+    &self,
+    _uid: i64,
+    _workspace_id: &str,
+    _object_id: &str,
+  ) -> FutureResult<Vec<u8>, FlowyError> {
+    // must return record not found error
+    FutureResult::new(async { Err(FlowyError::record_not_found()) })
   }
 
-  fn reset_workspace(&self, _collab_object: CollabObject) -> FutureResult<(), Error> {
+  fn reset_workspace(&self, _collab_object: CollabObject) -> FutureResult<(), FlowyError> {
     FutureResult::new(async { Ok(()) })
   }
 
@@ -145,7 +166,6 @@ impl UserCloudService for LocalServerUserAuthServiceImpl {
     &self,
     _collab_object: &CollabObject,
     _data: Vec<u8>,
-    _override_if_exist: bool,
   ) -> FutureResult<(), FlowyError> {
     FutureResult::new(async { Ok(()) })
   }
@@ -154,8 +174,45 @@ impl UserCloudService for LocalServerUserAuthServiceImpl {
     &self,
     _workspace_id: &str,
     _objects: Vec<UserCollabParams>,
-  ) -> FutureResult<(), Error> {
-    FutureResult::new(async { Err(anyhow!("local server doesn't support create collab object")) })
+  ) -> FutureResult<(), FlowyError> {
+    FutureResult::new(async {
+      Err(
+        FlowyError::local_version_not_support()
+          .with_context("local server doesn't support batch create collab object"),
+      )
+    })
+  }
+
+  fn create_workspace(&self, _workspace_name: &str) -> FutureResult<UserWorkspace, FlowyError> {
+    FutureResult::new(async {
+      Err(
+        FlowyError::local_version_not_support()
+          .with_context("local server doesn't support multiple workspaces"),
+      )
+    })
+  }
+
+  fn delete_workspace(&self, _workspace_id: &str) -> FutureResult<(), FlowyError> {
+    FutureResult::new(async {
+      Err(
+        FlowyError::local_version_not_support()
+          .with_context("local server doesn't support multiple workspaces"),
+      )
+    })
+  }
+
+  fn patch_workspace(
+    &self,
+    _workspace_id: &str,
+    _new_workspace_name: Option<&str>,
+    _new_workspace_icon: Option<&str>,
+  ) -> FutureResult<(), FlowyError> {
+    FutureResult::new(async {
+      Err(
+        FlowyError::local_version_not_support()
+          .with_context("local server doesn't support multiple workspaces"),
+      )
+    })
   }
 }
 
@@ -164,6 +221,7 @@ fn make_user_workspace() -> UserWorkspace {
     id: uuid::Uuid::new_v4().to_string(),
     name: "My Workspace".to_string(),
     created_at: Default::default(),
-    database_view_tracker_id: uuid::Uuid::new_v4().to_string(),
+    workspace_database_object_id: uuid::Uuid::new_v4().to_string(),
+    icon: "".to_string(),
   }
 }

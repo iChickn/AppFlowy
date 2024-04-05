@@ -7,10 +7,10 @@ use collab_folder::{View, ViewLayout};
 
 use flowy_derive::{ProtoBuf, ProtoBuf_Enum};
 use flowy_error::ErrorCode;
-use flowy_folder_deps::cloud::gen_view_id;
+use flowy_folder_pub::cloud::gen_view_id;
 
 use crate::entities::icon::ViewIconPB;
-use crate::entities::parser::view::{ViewDesc, ViewIdentify, ViewName, ViewThumbnail};
+use crate::entities::parser::view::{ViewIdentify, ViewName, ViewThumbnail};
 
 #[derive(Eq, PartialEq, ProtoBuf, Debug, Default, Clone)]
 pub struct ChildViewUpdatePB {
@@ -59,14 +59,14 @@ pub struct ViewPB {
   pub is_favorite: bool,
 }
 
-pub fn view_pb_without_child_views(view: Arc<View>) -> ViewPB {
+pub fn view_pb_without_child_views(view: View) -> ViewPB {
   ViewPB {
-    id: view.id.clone(),
-    parent_view_id: view.parent_view_id.clone(),
-    name: view.name.clone(),
+    id: view.id,
+    parent_view_id: view.parent_view_id,
+    name: view.name,
     create_time: view.created_at,
     child_views: Default::default(),
-    layout: view.layout.clone().into(),
+    layout: view.layout.into(),
     icon: view.icon.clone().map(|icon| icon.into()),
     is_favorite: view.is_favorite,
   }
@@ -81,7 +81,7 @@ pub fn view_pb_with_child_views(view: Arc<View>, child_views: Vec<Arc<View>>) ->
     create_time: view.created_at,
     child_views: child_views
       .into_iter()
-      .map(view_pb_without_child_views)
+      .map(|view| view_pb_without_child_views(view.as_ref().clone()))
       .collect(),
     layout: view.layout.clone().into(),
     icon: view.icon.clone().map(|icon| icon.into()),
@@ -116,6 +116,15 @@ impl std::convert::From<ViewLayout> for ViewLayoutPB {
       ViewLayout::Calendar => ViewLayoutPB::Calendar,
     }
   }
+}
+
+#[derive(Eq, PartialEq, Debug, Default, ProtoBuf, Clone)]
+pub struct SectionViewsPB {
+  #[pb(index = 1)]
+  pub section: ViewSectionPB,
+
+  #[pb(index = 2)]
+  pub views: Vec<ViewPB>,
 }
 
 #[derive(Eq, PartialEq, Debug, Default, ProtoBuf, Clone)]
@@ -181,6 +190,20 @@ pub struct CreateViewPayloadPB {
   // If the index is None or the index is out of range, the view will be appended to the end of the parent view.
   #[pb(index = 9, one_of)]
   pub index: Option<u32>,
+
+  // The section of the view.
+  // Only the view in public section will be shown in the shared workspace view list.
+  // The view in private section will only be shown in the user's private view list.
+  #[pb(index = 10, one_of)]
+  pub section: Option<ViewSectionPB>,
+}
+
+#[derive(Eq, PartialEq, Hash, Debug, ProtoBuf_Enum, Clone, Default)]
+pub enum ViewSectionPB {
+  #[default]
+  // only support public and private section now.
+  Private = 0,
+  Public = 1,
 }
 
 /// The orphan view is meant to be a view that is not attached to any parent view. By default, this
@@ -218,6 +241,8 @@ pub struct CreateViewParams {
   // The index of the view in the parent view.
   // If the index is None or the index is out of range, the view will be appended to the end of the parent view.
   pub index: Option<u32>,
+  // The section of the view.
+  pub section: Option<ViewSectionPB>,
 }
 
 impl TryInto<CreateViewParams> for CreateViewPayloadPB {
@@ -238,6 +263,7 @@ impl TryInto<CreateViewParams> for CreateViewPayloadPB {
       meta: self.meta,
       set_as_current: self.set_as_current,
       index: self.index,
+      section: self.section,
     })
   }
 }
@@ -259,6 +285,7 @@ impl TryInto<CreateViewParams> for CreateOrphanViewPayloadPB {
       meta: Default::default(),
       set_as_current: false,
       index: None,
+      section: None,
     })
   }
 }
@@ -336,11 +363,6 @@ impl TryInto<UpdateViewParams> for UpdateViewPayloadPB {
       Some(name) => Some(ViewName::parse(name)?.0),
     };
 
-    let desc = match self.desc {
-      None => None,
-      Some(desc) => Some(ViewDesc::parse(desc)?.0),
-    };
-
     let thumbnail = match self.thumbnail {
       None => None,
       Some(thumbnail) => Some(ViewThumbnail::parse(thumbnail)?.0),
@@ -351,7 +373,7 @@ impl TryInto<UpdateViewParams> for UpdateViewPayloadPB {
     Ok(UpdateViewParams {
       view_id,
       name,
-      desc,
+      desc: self.desc,
       thumbnail,
       is_favorite,
       layout: self.layout.map(|ty| ty.into()),
@@ -389,6 +411,12 @@ pub struct MoveNestedViewPayloadPB {
 
   #[pb(index = 3, one_of)]
   pub prev_view_id: Option<String>,
+
+  #[pb(index = 4, one_of)]
+  pub from_section: Option<ViewSectionPB>,
+
+  #[pb(index = 5, one_of)]
+  pub to_section: Option<ViewSectionPB>,
 }
 
 pub struct MoveViewParams {
@@ -410,10 +438,13 @@ impl TryInto<MoveViewParams> for MoveViewPayloadPB {
   }
 }
 
+#[derive(Debug)]
 pub struct MoveNestedViewParams {
   pub view_id: String,
   pub new_parent_id: String,
   pub prev_view_id: Option<String>,
+  pub from_section: Option<ViewSectionPB>,
+  pub to_section: Option<ViewSectionPB>,
 }
 
 impl TryInto<MoveNestedViewParams> for MoveNestedViewPayloadPB {
@@ -427,6 +458,8 @@ impl TryInto<MoveNestedViewParams> for MoveNestedViewPayloadPB {
       view_id,
       new_parent_id,
       prev_view_id,
+      from_section: self.from_section,
+      to_section: self.to_section,
     })
   }
 }
@@ -440,6 +473,15 @@ pub struct UpdateRecentViewPayloadPB {
   // If false, the view will be removed from the recent view list.
   #[pb(index = 2)]
   pub add_in_recent: bool,
+}
+
+#[derive(Default, ProtoBuf)]
+pub struct UpdateViewVisibilityStatusPayloadPB {
+  #[pb(index = 1)]
+  pub view_ids: Vec<String>,
+
+  #[pb(index = 2)]
+  pub is_public: bool,
 }
 
 // impl<'de> Deserialize<'de> for ViewDataType {

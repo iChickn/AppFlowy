@@ -8,11 +8,12 @@ use std::sync::{Arc, Weak};
 
 use collab_document::blocks::{
   BlockAction, BlockActionPayload, BlockActionType, BlockEvent, BlockEventPayload, DeltaType,
+  DocumentData,
 };
-use tracing::instrument;
 
 use flowy_error::{FlowyError, FlowyResult};
 use lib_dispatch::prelude::{data_result_ok, AFPluginData, AFPluginState, DataResult};
+use tracing::instrument;
 
 use crate::entities::*;
 use crate::parser::document_data_parser::DocumentDataParser;
@@ -39,7 +40,7 @@ pub(crate) async fn create_document_handler(
 ) -> FlowyResult<()> {
   let manager = upgrade_document(manager)?;
   let params: CreateDocumentParams = data.into_inner().try_into()?;
-  let uid = manager.user.user_id()?;
+  let uid = manager.user_service.user_id()?;
   manager
     .create_document(uid, &params.document_id, params.initial_data)
     .await?;
@@ -208,15 +209,25 @@ pub(crate) async fn can_undo_redo_handler(
   })
 }
 
-pub(crate) async fn get_snapshot_handler(
+pub(crate) async fn get_snapshot_meta_handler(
   data: AFPluginData<OpenDocumentPayloadPB>,
   manager: AFPluginState<Weak<DocumentManager>>,
-) -> DataResult<RepeatedDocumentSnapshotPB, FlowyError> {
+) -> DataResult<RepeatedDocumentSnapshotMetaPB, FlowyError> {
   let manager = upgrade_document(manager)?;
   let params: OpenDocumentParams = data.into_inner().try_into()?;
   let doc_id = params.document_id;
-  let snapshots = manager.get_document_snapshots(&doc_id, 10).await?;
-  data_result_ok(RepeatedDocumentSnapshotPB { items: snapshots })
+  let snapshots = manager.get_document_snapshot_meta(&doc_id, 10).await?;
+  data_result_ok(RepeatedDocumentSnapshotMetaPB { items: snapshots })
+}
+
+pub(crate) async fn get_snapshot_data_handler(
+  data: AFPluginData<DocumentSnapshotMetaPB>,
+  manager: AFPluginState<Weak<DocumentManager>>,
+) -> DataResult<DocumentSnapshotPB, FlowyError> {
+  let manager = upgrade_document(manager)?;
+  let params = data.into_inner();
+  let snapshot = manager.get_document_snapshot(&params.snapshot_id).await?;
+  data_result_ok(snapshot)
 }
 
 impl From<BlockActionPB> for BlockAction {
@@ -283,12 +294,15 @@ impl From<DeltaType> for DeltaTypePB {
   }
 }
 
-impl From<(&Vec<BlockEvent>, bool)> for DocEventPB {
-  fn from((events, is_remote): (&Vec<BlockEvent>, bool)) -> Self {
+impl From<(&Vec<BlockEvent>, bool, Option<DocumentData>)> for DocEventPB {
+  fn from(
+    (events, is_remote, new_snapshot): (&Vec<BlockEvent>, bool, Option<DocumentData>),
+  ) -> Self {
     // Convert each individual `BlockEvent` to a protobuf `BlockEventPB`, and collect the results into a `Vec`
     Self {
       events: events.iter().map(|e| e.to_owned().into()).collect(),
       is_remote,
+      new_snapshot: new_snapshot.map(|d| d.into()),
     }
   }
 }
@@ -390,4 +404,67 @@ pub(crate) async fn convert_data_to_json_handler(
   };
 
   data_result_ok(ConvertDataToJsonResponsePB { json: result })
+}
+
+// Handler for uploading a file
+// `workspace_id` and `file_name` determines file identity
+pub(crate) async fn upload_file_handler(
+  params: AFPluginData<UploadFileParamsPB>,
+  manager: AFPluginState<Weak<DocumentManager>>,
+) -> DataResult<UploadedFilePB, FlowyError> {
+  let AFPluginData(UploadFileParamsPB {
+    workspace_id,
+    local_file_path,
+    is_async,
+  }) = params;
+
+  let manager = upgrade_document(manager)?;
+  let url = manager
+    .upload_file(workspace_id, &local_file_path, is_async)
+    .await?;
+
+  Ok(AFPluginData(UploadedFilePB {
+    url,
+    local_file_path,
+  }))
+}
+
+#[instrument(level = "debug", skip_all, err)]
+pub(crate) async fn download_file_handler(
+  params: AFPluginData<UploadedFilePB>,
+  manager: AFPluginState<Weak<DocumentManager>>,
+) -> FlowyResult<()> {
+  let AFPluginData(UploadedFilePB {
+    url,
+    local_file_path,
+  }) = params;
+
+  let manager = upgrade_document(manager)?;
+  manager.download_file(local_file_path, url).await
+}
+
+// Handler for deleting file
+pub(crate) async fn delete_file_handler(
+  params: AFPluginData<UploadedFilePB>,
+  manager: AFPluginState<Weak<DocumentManager>>,
+) -> FlowyResult<()> {
+  let AFPluginData(UploadedFilePB {
+    url,
+    local_file_path,
+  }) = params;
+  let manager = upgrade_document(manager)?;
+  manager.delete_file(local_file_path, url).await
+}
+
+pub(crate) async fn set_awareness_local_state_handler(
+  data: AFPluginData<UpdateDocumentAwarenessStatePB>,
+  manager: AFPluginState<Weak<DocumentManager>>,
+) -> FlowyResult<()> {
+  let manager = upgrade_document(manager)?;
+  let data = data.into_inner();
+  let doc_id = data.document_id.clone();
+  manager
+    .set_document_awareness_local_state(&doc_id, data)
+    .await?;
+  Ok(())
 }

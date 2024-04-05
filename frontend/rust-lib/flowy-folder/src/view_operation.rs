@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 
 use flowy_error::FlowyError;
 
-use flowy_folder_deps::folder_builder::WorkspaceViewBuilder;
+use flowy_folder_pub::folder_builder::WorkspaceViewBuilder;
 use lib_infra::future::FutureResult;
 use lib_infra::util::timestamp;
 
@@ -32,6 +32,7 @@ pub trait FolderOperationHandler {
     FutureResult::new(async { Ok(()) })
   }
 
+  fn open_view(&self, view_id: &str) -> FutureResult<(), FlowyError>;
   /// Closes the view and releases the resources that this view has in
   /// the backend
   fn close_view(&self, view_id: &str) -> FutureResult<(), FlowyError>;

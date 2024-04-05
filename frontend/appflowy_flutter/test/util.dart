@@ -1,4 +1,3 @@
-import 'package:appflowy/main.dart';
 import 'package:appflowy/startup/launch_configuration.dart';
 import 'package:appflowy/startup/startup.dart';
 import 'package:appflowy/user/application/auth/auth_service.dart';
@@ -11,17 +10,7 @@ import 'package:flowy_infra/uuid.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
-class AppFlowyIntegrateTest {
-  static Future<AppFlowyIntegrateTest> ensureInitialized() async {
-    IntegrationTestWidgetsFlutterBinding.ensureInitialized();
-    SharedPreferences.setMockInitialValues({});
-    main();
-    return AppFlowyIntegrateTest();
-  }
-}
 
 class AppFlowyUnitTest {
   late UserProfilePB userProfile;
@@ -58,12 +47,12 @@ class AppFlowyUnitTest {
       email: userEmail,
     );
     result.fold(
-      (error) {
-        assert(false, 'Error: $error');
-      },
       (user) {
         userProfile = user;
         userService = UserBackendService(userId: userProfile.id);
+      },
+      (error) {
+        assert(false, 'Error: $error');
       },
     );
   }
@@ -85,7 +74,10 @@ class AppFlowyUnitTest {
   }
 
   Future<ViewPB> createWorkspace() async {
-    final result = await workspaceService.createApp(name: "Test App");
+    final result = await workspaceService.createView(
+      name: "Test App",
+      viewSection: ViewSectionPB.Public,
+    );
     return result.fold(
       (app) => app,
       (error) => throw Exception(error),
@@ -93,7 +85,7 @@ class AppFlowyUnitTest {
   }
 
   Future<List<ViewPB>> loadApps() async {
-    final result = await workspaceService.getViews();
+    final result = await workspaceService.getPublicViews();
 
     return result.fold(
       (apps) => apps,
@@ -114,7 +106,7 @@ void _pathProviderInitialized() {
 class AppFlowyApplicationUniTest implements EntryPoint {
   @override
   Widget create(LaunchConfiguration config) {
-    return Container();
+    return const SizedBox.shrink();
   }
 }
 

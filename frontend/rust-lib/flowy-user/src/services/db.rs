@@ -1,11 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, fs, io, sync::Arc, time::Duration};
 
-use chrono::Local;
-use parking_lot::RwLock;
-use tracing::{error, event, info, instrument};
-
-use collab_integrate::{PersistenceError, RocksCollabDB, YrsDocAction};
+use chrono::{Days, Local};
+use collab_integrate::{CollabKVAction, CollabKVDB, PersistenceError};
+use collab_plugins::local_storage::kv::KVTransactionDB;
 use flowy_error::FlowyError;
 use flowy_sqlite::schema::user_workspace_table;
 use flowy_sqlite::ConnectionPool;
@@ -14,15 +12,17 @@ use flowy_sqlite::{
   schema::{user_table, user_table::dsl},
   DBConnection, Database, ExpressionMethods,
 };
-use flowy_user_deps::entities::{UserProfile, UserWorkspace};
+use flowy_user_pub::entities::{UserProfile, UserWorkspace};
 use lib_dispatch::prelude::af_spawn;
 use lib_infra::file_util::{unzip_and_replace, zip_folder};
+use parking_lot::RwLock;
+use tracing::{error, event, info, instrument};
 
-use crate::services::user_sql::UserTable;
-use crate::services::workspace_sql::UserWorkspaceTable;
+use crate::services::sqlite_sql::user_sql::UserTable;
+use crate::services::sqlite_sql::workspace_sql::UserWorkspaceTable;
 
 pub trait UserDBPath: Send + Sync + 'static {
-  fn user_db_path(&self, uid: i64) -> PathBuf;
+  fn sqlite_db_path(&self, uid: i64) -> PathBuf;
   fn collab_db_path(&self, uid: i64) -> PathBuf;
   fn collab_db_history(&self, uid: i64, create_if_not_exist: bool) -> std::io::Result<PathBuf>;
 }
@@ -30,7 +30,7 @@ pub trait UserDBPath: Send + Sync + 'static {
 pub struct UserDB {
   paths: Box<dyn UserDBPath>,
   sqlite_map: RwLock<HashMap<i64, Database>>,
-  collab_db_map: RwLock<HashMap<i64, Arc<RocksCollabDB>>>,
+  collab_db_map: RwLock<HashMap<i64, Arc<CollabKVDB>>>,
 }
 
 impl UserDB {
@@ -134,16 +134,16 @@ impl UserDB {
   }
 
   pub(crate) fn get_pool(&self, user_id: i64) -> Result<Arc<ConnectionPool>, FlowyError> {
-    let pool = self.open_user_db(self.paths.user_db_path(user_id), user_id)?;
+    let pool = self.open_sqlite_db(self.paths.sqlite_db_path(user_id), user_id)?;
     Ok(pool)
   }
 
-  pub(crate) fn get_collab_db(&self, user_id: i64) -> Result<Arc<RocksCollabDB>, FlowyError> {
+  pub(crate) fn get_collab_db(&self, user_id: i64) -> Result<Arc<CollabKVDB>, FlowyError> {
     let collab_db = self.open_collab_db(self.paths.collab_db_path(user_id), user_id)?;
     Ok(collab_db)
   }
 
-  pub fn open_user_db(
+  pub fn open_sqlite_db(
     &self,
     db_path: impl AsRef<Path>,
     user_id: i64,
@@ -194,7 +194,7 @@ impl UserDB {
     &self,
     collab_db_path: impl AsRef<Path>,
     uid: i64,
-  ) -> Result<Arc<RocksCollabDB>, PersistenceError> {
+  ) -> Result<Arc<CollabKVDB>, PersistenceError> {
     if let Some(collab_db) = self.collab_db_map.read().get(&uid) {
       return Ok(collab_db.clone());
     }
@@ -205,7 +205,7 @@ impl UserDB {
       uid,
       collab_db_path.as_ref()
     );
-    let db = match RocksCollabDB::open(&collab_db_path) {
+    let db = match CollabKVDB::open(&collab_db_path) {
       Ok(db) => Ok(db),
       Err(err) => {
         error!("open collab db error, {:?}", err);
@@ -323,40 +323,46 @@ impl CollabDBZipBackup {
 
   fn clean_old_backups(&self) -> io::Result<()> {
     let mut backups = Vec::new();
-    let threshold_date = Local::now() - chrono::Duration::days(10);
-
-    // Collect all backup files
-    for entry in fs::read_dir(&self.history_folder)? {
-      let entry = entry?;
-      let path = entry.path();
-      if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("zip") {
-        let filename = path
-          .file_stem()
-          .and_then(|s| s.to_str())
-          .unwrap_or_default();
-        let date_str = filename.split('_').last().unwrap_or("");
-        backups.push((date_str.to_string(), path));
-      }
-    }
-
-    // Sort backups by date (oldest first)
-    backups.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Remove backups older than 10 days
-    let threshold_str = threshold_date.format(zip_time_format()).to_string();
-
-    info!("Current backup: {:?}", backups.len());
-    // If there are more than 10 backups, remove the oldest ones
-    while backups.len() > 10 {
-      if let Some((date_str, path)) = backups.first() {
-        if date_str < &threshold_str {
-          info!("Remove old backup file: {:?}", path);
-          fs::remove_file(path)?;
-          backups.remove(0);
-        } else {
-          break;
+    let now = Local::now();
+    match now.checked_sub_days(Days::new(10)) {
+      None => {
+        error!("Failed to calculate threshold date");
+      },
+      Some(threshold_date) => {
+        // Collect all backup files
+        for entry in fs::read_dir(&self.history_folder)? {
+          let entry = entry?;
+          let path = entry.path();
+          if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("zip") {
+            let filename = path
+              .file_stem()
+              .and_then(|s| s.to_str())
+              .unwrap_or_default();
+            let date_str = filename.split('_').last().unwrap_or("");
+            backups.push((date_str.to_string(), path));
+          }
         }
-      }
+
+        // Sort backups by date (oldest first)
+        backups.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Remove backups older than 10 days
+        let threshold_str = threshold_date.format(zip_time_format()).to_string();
+
+        info!("Current backup: {:?}", backups.len());
+        // If there are more than 10 backups, remove the oldest ones
+        while backups.len() > 10 {
+          if let Some((date_str, path)) = backups.first() {
+            if date_str < &threshold_str {
+              info!("Remove old backup file: {:?}", path);
+              fs::remove_file(path)?;
+              backups.remove(0);
+            } else {
+              break;
+            }
+          }
+        }
+      },
     }
 
     Ok(())
@@ -372,7 +378,7 @@ fn zip_time_format() -> &'static str {
 }
 
 pub(crate) fn validate_collab_db(
-  result: Result<Arc<RocksCollabDB>, PersistenceError>,
+  result: Result<Arc<CollabKVDB>, PersistenceError>,
   uid: i64,
   workspace_id: &str,
 ) -> bool {

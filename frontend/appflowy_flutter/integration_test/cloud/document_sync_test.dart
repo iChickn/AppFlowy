@@ -16,9 +16,9 @@ import 'package:flowy_infra/uuid.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:integration_test/integration_test.dart';
-import '../util/dir.dart';
-import '../util/mock/mock_file_picker.dart';
-import '../util/util.dart';
+import '../shared/dir.dart';
+import '../shared/mock/mock_file_picker.dart';
+import '../shared/util.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -31,16 +31,14 @@ void main() {
   group('appflowy cloud document', () {
     testWidgets('sync local docuemnt to server', (tester) async {
       await tester.initializeAppFlowy(
-        cloudType: AuthenticatorType.appflowyCloud,
+        cloudType: AuthenticatorType.appflowyCloudSelfHost,
         email: email,
       );
       await tester.tapGoogleLoginInButton();
       await tester.expectToSeeHomePageWithGetStartedPage();
 
       // create a new document called Sample
-      await tester.createNewPage(
-        layout: ViewLayoutPB.Document,
-      );
+      await tester.createNewPage();
 
       // focus on the editor
       await tester.editor.tapLineOfEditorAt(0);
@@ -58,7 +56,7 @@ void main() {
 
     testWidgets('sync doc from server', (tester) async {
       await tester.initializeAppFlowy(
-        cloudType: AuthenticatorType.appflowyCloud,
+        cloudType: AuthenticatorType.appflowyCloudSelfHost,
         email: email,
       );
       await tester.tapGoogleLoginInButton();

@@ -70,8 +70,9 @@ impl FlowySupabaseDatabaseTest {
     let workspace_id = self.user_manager.workspace_id().unwrap();
     let cloud_service = self.database_manager.get_cloud_service().clone();
     cloud_service
-      .get_collab_doc_state_db(database_id, CollabType::Database, &workspace_id)
+      .get_database_object_doc_state(database_id, CollabType::Database, &workspace_id)
       .await
+      .unwrap()
       .unwrap()
   }
 }
@@ -81,7 +82,7 @@ pub fn assert_database_collab_content(
   collab_update: &[u8],
   expected: JsonValue,
 ) {
-  let collab = MutexCollab::new(CollabOrigin::Server, database_id, vec![]);
+  let collab = MutexCollab::new(CollabOrigin::Server, database_id, vec![], false);
   collab.lock().with_origin_transact_mut(|txn| {
     let update = Update::decode_v1(collab_update).unwrap();
     txn.apply_update(update);

@@ -11,10 +11,11 @@ import 'package:appflowy/workspace/presentation/settings/widgets/settings_user_v
 import 'package:easy_localization/easy_localization.dart';
 import 'package:flowy_infra/uuid.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:path/path.dart' as p;
 import 'package:integration_test/integration_test.dart';
-import '../util/mock/mock_file_picker.dart';
-import '../util/util.dart';
+import 'package:path/path.dart' as p;
+
+import '../shared/mock/mock_file_picker.dart';
+import '../shared/util.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -22,7 +23,7 @@ void main() {
   group('appflowy cloud auth', () {
     testWidgets('sign in', (tester) async {
       await tester.initializeAppFlowy(
-        cloudType: AuthenticatorType.appflowyCloud,
+        cloudType: AuthenticatorType.appflowyCloudSelfHost,
       );
       await tester.tapGoogleLoginInButton();
       await tester.expectToSeeHomePageWithGetStartedPage();
@@ -30,7 +31,7 @@ void main() {
 
     testWidgets('sign out', (tester) async {
       await tester.initializeAppFlowy(
-        cloudType: AuthenticatorType.appflowyCloud,
+        cloudType: AuthenticatorType.appflowyCloudSelfHost,
       );
       await tester.tapGoogleLoginInButton();
 
@@ -47,13 +48,13 @@ void main() {
       tester.expectToSeeGoogleLoginButton();
     });
 
-    testWidgets('sign in as annoymous', (tester) async {
+    testWidgets('sign in as anonymous', (tester) async {
       await tester.initializeAppFlowy(
-        cloudType: AuthenticatorType.appflowyCloud,
+        cloudType: AuthenticatorType.appflowyCloudSelfHost,
       );
       await tester.tapSignInAsGuest();
 
-      // should not see the sync setting page when sign in as annoymous
+      // should not see the sync setting page when sign in as anonymous
       await tester.openSettings();
       await tester.openSettingsPage(SettingsPage.user);
       tester.expectToSeeGoogleLoginButton();
@@ -61,7 +62,7 @@ void main() {
 
     testWidgets('enable sync', (tester) async {
       await tester.initializeAppFlowy(
-        cloudType: AuthenticatorType.appflowyCloud,
+        cloudType: AuthenticatorType.appflowyCloudSelfHost,
       );
 
       await tester.tapGoogleLoginInButton();

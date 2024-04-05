@@ -35,6 +35,8 @@ class _NotificationDialogState extends State<NotificationDialog>
   @override
   void initState() {
     super.initState();
+    // Get all the past and upcoming reminders
+    _reminderBloc.add(const ReminderEvent.started());
     _controller.addListener(_updateState);
   }
 
@@ -117,7 +119,7 @@ class _NotificationDialogState extends State<NotificationDialog>
   }
 
   void _onDelete(ReminderPB reminder) {
-    _reminderBloc.add(ReminderEvent.remove(reminder: reminder));
+    _reminderBloc.add(ReminderEvent.remove(reminderId: reminder.id));
   }
 
   void _onReadChanged(ReminderPB reminder, bool isRead) {

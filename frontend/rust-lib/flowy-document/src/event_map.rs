@@ -4,8 +4,9 @@ use strum_macros::Display;
 
 use flowy_derive::{Flowy_Event, ProtoBuf_Enum};
 use lib_dispatch::prelude::AFPlugin;
+use tracing::event;
 
-use crate::event_handler::get_snapshot_handler;
+use crate::event_handler::get_snapshot_meta_handler;
 use crate::{event_handler::*, manager::DocumentManager};
 
 pub fn init(document_manager: Weak<DocumentManager>) -> AFPlugin {
@@ -24,13 +25,27 @@ pub fn init(document_manager: Weak<DocumentManager>) -> AFPlugin {
     .event(DocumentEvent::Redo, redo_handler)
     .event(DocumentEvent::Undo, undo_handler)
     .event(DocumentEvent::CanUndoRedo, can_undo_redo_handler)
-    .event(DocumentEvent::GetDocumentSnapshots, get_snapshot_handler)
+    .event(
+      DocumentEvent::GetDocumentSnapshotMeta,
+      get_snapshot_meta_handler,
+    )
+    .event(
+      DocumentEvent::GetDocumentSnapshot,
+      get_snapshot_data_handler,
+    )
     .event(DocumentEvent::CreateText, create_text_handler)
     .event(DocumentEvent::ApplyTextDeltaEvent, apply_text_delta_handler)
     .event(DocumentEvent::ConvertDocument, convert_document_handler)
     .event(
       DocumentEvent::ConvertDataToJSON,
       convert_data_to_json_handler,
+    )
+    .event(DocumentEvent::UploadFile, upload_file_handler)
+    .event(DocumentEvent::DownloadFile, download_file_handler)
+    .event(DocumentEvent::DeleteFile, delete_file_handler)
+    .event(
+      DocumentEvent::SetAwarenessState,
+      set_awareness_local_state_handler,
     )
 }
 
@@ -73,8 +88,11 @@ pub enum DocumentEvent {
   )]
   CanUndoRedo = 8,
 
-  #[event(input = "OpenDocumentPayloadPB", output = "RepeatedDocumentSnapshotPB")]
-  GetDocumentSnapshots = 9,
+  #[event(
+    input = "OpenDocumentPayloadPB",
+    output = "RepeatedDocumentSnapshotMetaPB"
+  )]
+  GetDocumentSnapshotMeta = 9,
 
   #[event(input = "TextDeltaPayloadPB")]
   CreateText = 10,
@@ -95,4 +113,17 @@ pub enum DocumentEvent {
     output = "ConvertDataToJsonResponsePB"
   )]
   ConvertDataToJSON = 13,
+
+  #[event(input = "DocumentSnapshotMetaPB", output = "DocumentSnapshotPB")]
+  GetDocumentSnapshot = 14,
+
+  #[event(input = "UploadFileParamsPB", output = "UploadedFilePB")]
+  UploadFile = 15,
+  #[event(input = "UploadedFilePB")]
+  DownloadFile = 16,
+  #[event(input = "UploadedFilePB")]
+  DeleteFile = 17,
+
+  #[event(input = "UpdateDocumentAwarenessStatePB")]
+  SetAwarenessState = 18,
 }

@@ -3,25 +3,28 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use bytes::Bytes;
-use flowy_folder::entities::ImportAppFlowyDataPB;
-use flowy_folder::event_map::FolderEvent;
+
+use flowy_folder::entities::{RepeatedViewPB, WorkspacePB};
 use nanoid::nanoid;
 use protobuf::ProtobufError;
 use tokio::sync::broadcast::{channel, Sender};
 use tracing::error;
 use uuid::Uuid;
 
+use flowy_folder::event_map::FolderEvent;
 use flowy_notification::entities::SubscribeObject;
 use flowy_notification::NotificationSender;
-use flowy_server::supabase::define::{USER_DEVICE_ID, USER_EMAIL, USER_SIGN_IN_URL, USER_UUID};
-use flowy_server_config::af_cloud_config::AFCloudConfiguration;
-use flowy_server_config::AuthenticatorType;
+use flowy_server::af_cloud::define::{USER_DEVICE_ID, USER_EMAIL, USER_SIGN_IN_URL, USER_UUID};
+use flowy_server_pub::af_cloud_config::AFCloudConfiguration;
+use flowy_server_pub::AuthenticatorType;
 use flowy_user::entities::{
-  AuthenticatorPB, CloudSettingPB, OauthSignInPB, SignInUrlPB, SignInUrlPayloadPB, SignUpPayloadPB,
-  UpdateCloudConfigPB, UpdateUserProfilePayloadPB, UserProfilePB,
+  AuthenticatorPB, ChangeWorkspaceIconPB, CloudSettingPB, CreateWorkspacePB, ImportAppFlowyDataPB,
+  OauthSignInPB, RenameWorkspacePB, RepeatedUserWorkspacePB, SignInUrlPB, SignInUrlPayloadPB,
+  SignUpPayloadPB, UpdateCloudConfigPB, UpdateUserProfilePayloadPB, UserProfilePB,
+  UserWorkspaceIdPB, UserWorkspacePB,
 };
 use flowy_user::errors::{FlowyError, FlowyResult};
-use flowy_user::event_map::UserEvent::*;
+use flowy_user::event_map::UserEvent;
 use lib_dispatch::prelude::{af_spawn, AFPluginDispatcher, AFPluginRequest, ToBytes};
 
 use crate::event_builder::EventBuilder;
@@ -30,7 +33,7 @@ use crate::EventIntegrationTest;
 impl EventIntegrationTest {
   pub async fn enable_encryption(&self) -> String {
     let config = EventBuilder::new(self.clone())
-      .event(GetCloudConfig)
+      .event(UserEvent::GetCloudConfig)
       .async_send()
       .await
       .parse::<CloudSettingPB>();
@@ -39,7 +42,7 @@ impl EventIntegrationTest {
       enable_encrypt: Some(true),
     };
     let error = EventBuilder::new(self.clone())
-      .event(SetCloudConfig)
+      .event(UserEvent::SetCloudConfig)
       .payload(update)
       .async_send()
       .await
@@ -67,8 +70,8 @@ impl EventIntegrationTest {
     .into_bytes()
     .unwrap();
 
-    let request = AFPluginRequest::new(SignUp).payload(payload);
-    let user_profile = AFPluginDispatcher::async_send(self.appflowy_core.dispatcher(), request)
+    let request = AFPluginRequest::new(UserEvent::SignUp).payload(payload);
+    let user_profile = AFPluginDispatcher::async_send(&self.appflowy_core.dispatcher(), request)
       .await
       .parse::<UserProfilePB, FlowyError>()
       .unwrap()
@@ -94,7 +97,7 @@ impl EventIntegrationTest {
     };
 
     EventBuilder::new(self.clone())
-      .event(OauthSignIn)
+      .event(UserEvent::OauthSignIn)
       .payload(payload)
       .async_send()
       .await
@@ -103,7 +106,7 @@ impl EventIntegrationTest {
 
   pub async fn sign_out(&self) {
     EventBuilder::new(self.clone())
-      .event(SignOut)
+      .event(UserEvent::SignOut)
       .async_send()
       .await;
   }
@@ -118,7 +121,7 @@ impl EventIntegrationTest {
 
   pub async fn get_user_profile(&self) -> Result<UserProfilePB, FlowyError> {
     EventBuilder::new(self.clone())
-      .event(GetUserProfile)
+      .event(UserEvent::GetUserProfile)
       .async_send()
       .await
       .try_parse::<UserProfilePB>()
@@ -126,7 +129,7 @@ impl EventIntegrationTest {
 
   pub async fn update_user_profile(&self, params: UpdateUserProfilePayloadPB) {
     EventBuilder::new(self.clone())
-      .event(UpdateUserProfile)
+      .event(UserEvent::UpdateUserProfile)
       .payload(params)
       .async_send()
       .await;
@@ -138,7 +141,7 @@ impl EventIntegrationTest {
       authenticator: AuthenticatorPB::AppFlowyCloud,
     };
     let sign_in_url = EventBuilder::new(self.clone())
-      .event(GenerateSignInURL)
+      .event(UserEvent::GenerateSignInURL)
       .payload(payload)
       .async_send()
       .await
@@ -154,7 +157,7 @@ impl EventIntegrationTest {
     };
 
     let user_profile = EventBuilder::new(self.clone())
-      .event(OauthSignIn)
+      .event(UserEvent::OauthSignIn)
       .payload(payload)
       .async_send()
       .await
@@ -181,7 +184,7 @@ impl EventIntegrationTest {
     };
 
     let user_profile = EventBuilder::new(self.clone())
-      .event(OauthSignIn)
+      .event(UserEvent::OauthSignIn)
       .payload(payload)
       .async_send()
       .await
@@ -200,7 +203,7 @@ impl EventIntegrationTest {
       import_container_name: name,
     };
     match EventBuilder::new(self.clone())
-      .event(FolderEvent::ImportAppFlowyDataFolder)
+      .event(UserEvent::ImportAppFlowyDataFolder)
       .payload(payload)
       .async_send()
       .await
@@ -209,6 +212,117 @@ impl EventIntegrationTest {
       Some(err) => Err(err),
       None => Ok(()),
     }
+  }
+
+  pub async fn create_workspace(&self, name: &str) -> UserWorkspacePB {
+    let payload = CreateWorkspacePB {
+      name: name.to_string(),
+    };
+    EventBuilder::new(self.clone())
+      .event(UserEvent::CreateWorkspace)
+      .payload(payload)
+      .async_send()
+      .await
+      .parse::<UserWorkspacePB>()
+  }
+
+  pub async fn rename_workspace(
+    &self,
+    workspace_id: &str,
+    new_name: &str,
+  ) -> Result<(), FlowyError> {
+    let payload = RenameWorkspacePB {
+      workspace_id: workspace_id.to_owned(),
+      new_name: new_name.to_owned(),
+    };
+    match EventBuilder::new(self.clone())
+      .event(UserEvent::RenameWorkspace)
+      .payload(payload)
+      .async_send()
+      .await
+      .error()
+    {
+      Some(err) => Err(err),
+      None => Ok(()),
+    }
+  }
+
+  pub async fn change_workspace_icon(
+    &self,
+    workspace_id: &str,
+    new_icon: &str,
+  ) -> Result<(), FlowyError> {
+    let payload = ChangeWorkspaceIconPB {
+      workspace_id: workspace_id.to_owned(),
+      new_icon: new_icon.to_owned(),
+    };
+    match EventBuilder::new(self.clone())
+      .event(UserEvent::ChangeWorkspaceIcon)
+      .payload(payload)
+      .async_send()
+      .await
+      .error()
+    {
+      Some(err) => Err(err),
+      None => Ok(()),
+    }
+  }
+
+  pub async fn folder_read_current_workspace(&self) -> WorkspacePB {
+    EventBuilder::new(self.clone())
+      .event(FolderEvent::ReadCurrentWorkspace)
+      .async_send()
+      .await
+      .parse()
+  }
+
+  pub async fn folder_read_current_workspace_views(&self) -> RepeatedViewPB {
+    EventBuilder::new(self.clone())
+      .event(FolderEvent::ReadCurrentWorkspaceViews)
+      .async_send()
+      .await
+      .parse()
+  }
+
+  pub async fn get_all_workspaces(&self) -> RepeatedUserWorkspacePB {
+    EventBuilder::new(self.clone())
+      .event(UserEvent::GetAllWorkspace)
+      .async_send()
+      .await
+      .parse::<RepeatedUserWorkspacePB>()
+  }
+
+  pub async fn delete_workspace(&self, workspace_id: &str) {
+    let payload = UserWorkspaceIdPB {
+      workspace_id: workspace_id.to_string(),
+    };
+    EventBuilder::new(self.clone())
+      .event(UserEvent::DeleteWorkspace)
+      .payload(payload)
+      .async_send()
+      .await;
+  }
+
+  pub async fn open_workspace(&self, workspace_id: &str) {
+    let payload = UserWorkspaceIdPB {
+      workspace_id: workspace_id.to_string(),
+    };
+    EventBuilder::new(self.clone())
+      .event(UserEvent::OpenWorkspace)
+      .payload(payload)
+      .async_send()
+      .await;
+  }
+
+  pub async fn leave_workspace(&self, workspace_id: &str) {
+    let payload = UserWorkspaceIdPB {
+      workspace_id: workspace_id.to_string(),
+    };
+    EventBuilder::new(self.clone())
+      .event(UserEvent::LeaveWorkspace)
+      .payload(payload)
+      .async_send()
+      .await;
   }
 }
 
@@ -325,12 +439,26 @@ pub struct SignUpContext {
 
 pub async fn user_localhost_af_cloud() {
   AuthenticatorType::AppFlowyCloud.write_env();
+  let base_url =
+    std::env::var("af_cloud_test_base_url").unwrap_or("http://localhost:8000".to_string());
+  let ws_base_url =
+    std::env::var("af_cloud_test_ws_url").unwrap_or("ws://localhost:8000/ws/v1".to_string());
+  let gotrue_url =
+    std::env::var("af_cloud_test_gotrue_url").unwrap_or("http://localhost:9999".to_string());
   AFCloudConfiguration {
-    base_url: "http://localhost:8000".to_string(),
-    ws_base_url: "ws://localhost:8000/ws".to_string(),
-    gotrue_url: "http://localhost:9998".to_string(),
+    base_url,
+    ws_base_url,
+    gotrue_url,
   }
   .write_env();
   std::env::set_var("GOTRUE_ADMIN_EMAIL", "admin@example.com");
   std::env::set_var("GOTRUE_ADMIN_PASSWORD", "password");
+}
+
+#[allow(dead_code)]
+pub async fn user_localhost_af_cloud_with_nginx() {
+  std::env::set_var("af_cloud_test_base_url", "http://localhost");
+  std::env::set_var("af_cloud_test_ws_url", "ws://localhost/ws/v1");
+  std::env::set_var("af_cloud_test_gotrue_url", "http://localhost/gotrue");
+  user_localhost_af_cloud().await
 }

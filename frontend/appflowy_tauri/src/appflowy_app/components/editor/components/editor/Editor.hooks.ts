@@ -1,22 +1,21 @@
-import { createContext, useCallback, useEffect, useMemo, useState } from 'react';
-import { EditorNodeType, CodeNode } from '$app/application/document/document.types';
+import { KeyboardEvent, useCallback, useEffect, useMemo } from 'react';
 
-import { createEditor, NodeEntry, BaseRange, Editor, Element, Range } from 'slate';
+import { BaseRange, createEditor, Editor, Element, NodeEntry, Range, Transforms } from 'slate';
 import { ReactEditor, withReact } from 'slate-react';
 import { withBlockPlugins } from '$app/components/editor/plugins/withBlockPlugins';
-import { decorateCode } from '$app/components/editor/components/blocks/code/utils';
-import { withShortcuts } from '$app/components/editor/components/editor/shortcuts';
 import { withInlines } from '$app/components/editor/components/inline_nodes';
-import { withYjs, YjsEditor, withYHistory } from '@slate-yjs/core';
+import { withYHistory, withYjs, YjsEditor } from '@slate-yjs/core';
 import * as Y from 'yjs';
 import { CustomEditor } from '$app/components/editor/command';
-import { proxySet, subscribeKey } from 'valtio/utils';
-import { useSnapshot } from 'valtio';
+import { CodeNode, EditorNodeType } from '$app/application/document/document.types';
+import { decorateCode } from '$app/components/editor/components/blocks/code/utils';
+import { withMarkdown } from '$app/components/editor/plugins/shortcuts';
+import { createHotkey, HOT_KEY_NAME } from '$app/utils/hotkeys';
 
 export function useEditor(sharedType: Y.XmlText) {
   const editor = useMemo(() => {
     if (!sharedType) return null;
-    const e = withShortcuts(withBlockPlugins(withInlines(withReact(withYHistory(withYjs(createEditor(), sharedType))))));
+    const e = withMarkdown(withBlockPlugins(withInlines(withReact(withYHistory(withYjs(createEditor(), sharedType))))));
 
     // Ensure editor always has at least 1 valid child
     const { normalizeNode } = e;
@@ -48,6 +47,20 @@ export function useEditor(sharedType: Y.XmlText) {
   }, [editor]);
 
   const handleOnClickEnd = useCallback(() => {
+    const path = [editor.children.length - 1];
+    const node = Editor.node(editor, path) as NodeEntry<Element>;
+    const latestNodeIsEmpty = CustomEditor.isEmptyText(editor, node[0]);
+
+    if (latestNodeIsEmpty) {
+      ReactEditor.focus(editor);
+      editor.select(path);
+      editor.collapse({
+        edge: 'end',
+      });
+
+      return;
+    }
+
     CustomEditor.insertEmptyLineAtEnd(editor);
   }, [editor]);
 
@@ -63,7 +76,12 @@ export function useDecorateCodeHighlight(editor: ReactEditor) {
     (entry: NodeEntry): BaseRange[] => {
       const path = entry[1];
 
-      const blockEntry = path.length > 1 ? editor.node([path[0]]) : editor.node(path);
+      const blockEntry = editor.above({
+        at: path,
+        match: (n) => !Editor.isEditor(n) && Element.isElement(n) && n.blockId !== undefined,
+      });
+
+      if (!blockEntry) return [];
 
       const block = blockEntry[0] as CodeNode;
 
@@ -79,103 +97,41 @@ export function useDecorateCodeHighlight(editor: ReactEditor) {
   );
 }
 
-export function useEditorState(editor: ReactEditor) {
-  const selectedBlocks = useMemo(() => proxySet([]), []);
-  const decorateState = useMemo(
-    () =>
-      proxySet<{
-        range: BaseRange;
-        class_name: string;
-      }>([]),
-    []
-  );
+export function useInlineKeyDown(editor: ReactEditor) {
+  return useCallback(
+    (e: KeyboardEvent<HTMLDivElement>) => {
+      const selection = editor.selection;
 
-  const [selectedLength, setSelectedLength] = useState(0);
+      // Default left/right behavior is unit:'character'.
+      // This fails to distinguish between two cursor positions, such as
+      // <inline>foo<cursor/></inline> vs <inline>foo</inline><cursor/>.
+      // Here we modify the behavior to unit:'offset'.
+      // This lets the user step into and out of the inline without stepping over characters.
+      // You may wish to customize this further to only use unit:'offset' in specific cases.
+      if (selection && Range.isCollapsed(selection)) {
+        const { nativeEvent } = e;
 
-  const ranges = useSnapshot(decorateState);
+        if (
+          createHotkey(HOT_KEY_NAME.LEFT)(nativeEvent) &&
+          CustomEditor.beforeIsInlineNode(editor, selection, {
+            unit: 'offset',
+          })
+        ) {
+          e.preventDefault();
+          Transforms.move(editor, { unit: 'offset', reverse: true });
+          return;
+        }
 
-  subscribeKey(selectedBlocks, 'size', (v) => setSelectedLength(v));
-
-  useEffect(() => {
-    const { onChange } = editor;
-
-    const onKeydown = (e: KeyboardEvent) => {
-      if (!ReactEditor.isFocused(editor) && selectedLength > 0) {
-        e.preventDefault();
-        e.stopPropagation();
-        const selectedBlockId = selectedBlocks.values().next().value;
-        const [selectedBlock] = editor.nodes({
-          at: [],
-          match: (n) => Element.isElement(n) && n.blockId === selectedBlockId,
-        });
-        const [, path] = selectedBlock;
-
-        editor.select(path);
-        ReactEditor.focus(editor);
+        if (
+          createHotkey(HOT_KEY_NAME.RIGHT)(nativeEvent) &&
+          CustomEditor.afterIsInlineNode(editor, selection, { unit: 'offset' })
+        ) {
+          e.preventDefault();
+          Transforms.move(editor, { unit: 'offset' });
+          return;
+        }
       }
-    };
-
-    if (selectedLength > 0) {
-      editor.onChange = (...args) => {
-        const isSelectionChange = editor.operations.every((arg) => arg.type === 'set_selection');
-
-        if (isSelectionChange) {
-          selectedBlocks.clear();
-        }
-
-        onChange(...args);
-      };
-
-      document.addEventListener('keydown', onKeydown);
-    } else {
-      editor.onChange = onChange;
-      document.removeEventListener('keydown', onKeydown);
-    }
-
-    return () => {
-      editor.onChange = onChange;
-      document.removeEventListener('keydown', onKeydown);
-    };
-  }, [editor, selectedBlocks, selectedLength]);
-
-  const decorate = useCallback(
-    ([, path]: NodeEntry): BaseRange[] => {
-      const highlightRanges: (Range & {
-        class_name: string;
-      })[] = [];
-
-      ranges.forEach((state) => {
-        const intersection = Range.intersection(state.range, Editor.range(editor, path));
-
-        if (intersection) {
-          highlightRanges.push({
-            ...intersection,
-            class_name: state.class_name,
-          });
-        }
-      });
-
-      return highlightRanges;
     },
-    [editor, ranges]
+    [editor]
   );
-
-  return {
-    selectedBlocks,
-    decorate,
-    decorateState,
-  };
 }
-
-export const EditorSelectedBlockContext = createContext<Set<string>>(new Set());
-
-export const EditorSelectedBlockProvider = EditorSelectedBlockContext.Provider;
-
-export const DecorateStateContext = createContext<
-  Set<{
-    range: BaseRange;
-    class_name: string;
-  }>
->(new Set());
-
-export const DecorateStateProvider = DecorateStateContext.Provider;
